@@ -3,7 +3,7 @@
 # Note: for setting up email with sendmail, see: http://linuxconfig.org/configuring-gmail-as-sendmail-email-relay
 
 import argparse
-import commands
+# import commands
 import json
 import logging
 import smtplib
@@ -12,6 +12,8 @@ import os
 import glob
 import requests
 import hashlib
+import schedule
+import time
 
 from datetime import datetime
 from os import path
@@ -85,37 +87,39 @@ def notify_send_email(dates, current_apt, settings, use_gmail=False):
         log(e)
 
 def notify_osx(msg):
-    commands.getstatusoutput("osascript -e 'display notification \"%s\" with title \"Global Entry Notifier\"'" % msg)
+    return
+    # commands.getstatusoutput("osascript -e 'display notification \"%s\" with title \"Global Entry Notifier\"'" % msg)
 
-def notify_sms(settings, dates):
-    for avail_apt in dates: 
-        try:
-            from twilio.rest import Client
-        except ImportError:
-            logging.warning('Trying to send SMS, but TwilioRestClient not installed. Try \'pip install twilio\'')
-            return
+def notify_sms(settings, dates): 
+    try:
+        from twilio.rest import Client
+    except ImportError:
+        logging.warning('Trying to send SMS, but TwilioRestClient not installed. Try \'pip install twilio\'')
+        return
 
-        try:
-            account_sid = settings['twilio_account_sid']
-            auth_token = settings['twilio_auth_token']
-            from_number = settings['twilio_from_number']
-            to_number = settings['twilio_to_number']
-            assert account_sid and auth_token and from_number and to_number
-        except (KeyError, AssertionError):
-            logging.warning('Trying to send SMS, but one of the required Twilio settings is missing or empty')
-            return
+    try:
+        account_sid = settings['twilio_account_sid']
+        auth_token = settings['twilio_auth_token']
+        from_number = settings['twilio_from_number']
+        to_number = settings['twilio_to_number']
+        assert account_sid and auth_token and from_number and to_number
+    except (KeyError, AssertionError):
+        logging.warning('Trying to send SMS, but one of the required Twilio settings is missing or empty')
+        return
 
-        # Twilio logs annoyingly, silence that
-        logging.getLogger('twilio').setLevel(logging.WARNING)
-        client = Client(account_sid, auth_token)
-        body = 'New GOES appointment available on %s' % avail_apt
-        logging.info('Sending SMS.')
-        client.messages.create(body=body, to=to_number, from_=from_number)
+    # Twilio logs annoyingly, silence that
+    logging.getLogger('twilio').setLevel(logging.WARNING)
+    client = Client(account_sid, auth_token)
+    body = 'New GOES appointments available on %s' % dates
+    logging.info('Sending SMS.')
+    client.messages.create(body=body, to=to_number, from_=from_number)
 
 def main(settings):
     try:
         # obtain the json from the web url
         data = requests.get(GOES_URL_FORMAT.format(settings['enrollment_location_id'])).json()
+
+        print(data)
 
     	# parse the json
         if not data:
@@ -132,9 +136,12 @@ def main(settings):
                     dates.append(dtp.strftime('%A, %B %d @ %I:%M%p'))
 
         if not dates:
+            print("found no appointments")
             return
+        else:
+            print("found appointments at ", dates)
 
-        hash = hashlib.md5(''.join(dates) + current_apt.strftime('%B %d, %Y @ %I:%M%p')).hexdigest()
+        hash = hashlib.md5(''.join(dates).encode('utf-8')).hexdigest()
         fn = "goes-notify_{0}.txt".format(hash)
         if settings.get('no_spamming') and os.path.exists(fn):
             return
@@ -197,7 +204,7 @@ if __name__ == '__main__':
             settings = json.load(json_file)
 
             # merge args into settings IF they're True
-            for key, val in arguments.iteritems():
+            for key, val in arguments.items():
                 if not arguments.get(key): continue
                 settings[key] = val
 
@@ -216,4 +223,8 @@ if __name__ == '__main__':
 
     logging.debug('Running cron with arguments: %s' % arguments)
 
-    main(settings)
+    schedule.every(10).seconds.do(main, settings=settings)
+
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
